@@ -2,7 +2,7 @@
 outputs
 checkpoints
 data
-logs/
+logs/*
 outputs/
 
 .DS_Store
