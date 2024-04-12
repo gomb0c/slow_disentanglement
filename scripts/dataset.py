@@ -9,9 +9,9 @@ import scipy.io as sio
 from sklearn.utils.extmath import cartesian
 from scipy.stats import laplace
 import joblib
-from spriteworld import factor_distributions as distribs
-from spriteworld import renderers as spriteworld_renderers
-from spriteworld import sprite
+#from spriteworld import factor_distributions as distribs
+#from spriteworld import renderers as spriteworld_renderers
+#from spriteworld import sprite
 import csv
 from collections import defaultdict
 import ast
@@ -150,7 +150,7 @@ class TupleLoader(Dataset):
 			p = laplace.pdf(x, loc=mean, scale=np.log(upper) / rate)
 			p /= np.sum(p)
 			end.append(np.random.choice(x, 1, p=p)[0])
-		end = np.array(end).astype(np.int)
+		end = np.array(end).astype(np.int64)
 		end[self.categorical] = start[self.categorical]   # don't change categorical factors s.a. shape
 		# make sure there is at least one change
 		if np.sum(abs(start - end)) == 0:
@@ -596,7 +596,7 @@ class Shapes3D(TupleLoader):
 	url = 'https://storage.googleapis.com/3d-shapes/3dshapes.h5'
 	fname = '3dshapes.h5'
 
-	def __init__(self, path='./data/shapes3d/', data=None, **tupel_loader_kwargs):
+	def __init__(self, path='/home/bethia/Documents/Data/datasets/shapes3d/', data=None, **tupel_loader_kwargs):
 		super().__init__(**tupel_loader_kwargs)
 
 		self.factor_sizes = [10, 10, 10, 8, 4, 15]
@@ -606,8 +606,8 @@ class Shapes3D(TupleLoader):
 
 		self.path = path
 
-		if not os.path.exists(self.path):
-			self.download()
+		if not os.path.exists(self.path): raise FileNotFoundError
+			#self.download()
 
 		# read dataset
 		print('init of shapes dataset (takes a couple of seconds) (large data array)')
@@ -639,7 +639,7 @@ class SpriteDataset(TupleLoader):
 	for details see https://github.com/deepmind/dsprites-dataset
 	"""
 
-	def __init__(self, path='./data/dsprites/', **tupel_loader_kwargs):
+	def __init__(self, path='/home/bethia/Documents/Data/datasets/dsprites', **tupel_loader_kwargs):
 		super().__init__(**tupel_loader_kwargs)
 
 		url = "https://github.com/deepmind/dsprites-dataset/raw/master/dsprites_ndarray_co1sh3sc6or40x32y32_64x64.npz"
@@ -664,7 +664,7 @@ class SpriteDataset(TupleLoader):
 		return len(self.data)
 
 	def load_data(self):
-		dataset_zip = np.load(os.path.join(self.path, 'dsprites.npz'),
+		dataset_zip = np.load(os.path.join(self.path, 'dsprites_ndarray_co1sh3sc6or40x32y32_64x64.npz'),
 							  encoding="latin1", allow_pickle=True)
 		return dataset_zip["imgs"].squeeze().astype(np.float32)
 
@@ -681,7 +681,7 @@ class MPI3DReal(TupleLoader):
 	url = 'https://storage.googleapis.com/disentanglement_dataset/Final_Dataset/mpi3d_real.npz'
 	fname = 'mpi3d_real.npz'
 
-	def __init__(self, path='./data/mpi3d_real/', **tupel_loader_kwargs):
+	def __init__(self, path='/home/bethia/Documents/Data/datasets/mpi3d/', **tupel_loader_kwargs):
 		super().__init__(**tupel_loader_kwargs)
 
 		self.factor_sizes = [6, 6, 2, 3, 3, 40, 40]
@@ -689,7 +689,8 @@ class MPI3DReal(TupleLoader):
 		self.categorical = np.array([False, True, False, False, False, False, False])
 		self.index_manager = IndexManger(self.factor_sizes)
 		if not os.path.exists(path):
-			self.download(path)
+			raise FileNotFoundError
+            #self.download(path)
 
 		load_path = os.path.join(path, self.fname)
 		data = np.load(load_path)['images']
@@ -709,7 +710,10 @@ def value_to_key(x, val):
 def rgb(c):
 	return tuple((255 * np.array(c)).astype(np.uint8))
 
+
 class NaturalSprites(Dataset):
+    pass 
+""" 
 	def __init__(self, natural_discrete=False, path='./data/natural_sprites/'):
 		self.natural_discrete = natural_discrete
 		self.sequence_len = 2 #only consider pairs
@@ -871,7 +875,7 @@ class NaturalSprites(Dataset):
 		res['c2'] = 1.
 		return res
 
-
+""" 
 class KittiMasks(Dataset):
 	'''
 	latents encode:
@@ -1108,14 +1112,14 @@ def test_data(dset, plot=False):
 
 if __name__ == '__main__':
 	# cars
-	print('cars3D')
-	dset = Cars3D(prior='uniform', rate=1, k=-1)
-	test_data(dset, False)
+	#print('cars3D')
+	#dset = Cars3D(prior='uniform', rate=1, k=-1)
+	#test_data(dset, False)
 
 	# norb
-	print('SmallNORB')
-	dset = SmallNORB(prior='laplace', rate=1, k=-1)
-	test_data(dset, False)
+	#print('SmallNORB')
+	#dset = SmallNORB(prior='laplace', rate=1, k=-1)
+	#test_data(dset, False)
 
 	# dsprites example
 	print('DSprites')
