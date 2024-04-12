@@ -29,7 +29,7 @@ import pickle
 import h5py
 from matplotlib import pyplot as plt
 
-from scripts.splits.splits import dsprites_cg_splits, shapes3d_cg_splits, mpi3d_cg_splits
+from scripts.splits.splits import *
 
 class TupleLoader(Dataset):
 	def __init__(self, k=-1, rate=1, prior='uniform', transform=None,
@@ -51,6 +51,7 @@ class TupleLoader(Dataset):
 		self.possible_factors_exc_categorical = None 
 		self.possible_fillers = None 
 		self.categorical_idxs = None 
+		self.factor_classes = None 
 
 		if prior == 'laplace' and k != -1:
 			print('warning setting k has no effect on prior=laplace. '
@@ -91,10 +92,10 @@ class TupleLoader(Dataset):
 			possible_factors_exc_categorical = possible_factors[~np.isin(possible_factors, self.categorical_idxs)]
 			print(f'Possible factors is {possible_factors}, exc categorical {possible_factors_exc_categorical}')
 		else: 
-			possible_factors = n_factors 
+			possible_factors = np.arange(n_factors)
 			possible_factors_exc_categorical = possible_factors[~self.categorical]
 		self.possible_factors = possible_factors
-		self.possible_factors_exc_categorical = self.possible_factors_exc_categorical
+		self.possible_factors_exc_categorical = possible_factors_exc_categorical
 
 	def sample_factors(self, num, random_state):
 		"""Sample a batch of observations X. Needed in dis. lib."""
@@ -130,6 +131,7 @@ class TupleLoader(Dataset):
 		#Sample a batch of observations X
 		return self.sample(num, random_state)[1]
 
+	# rework this under assumption k = 1
 	def __getitem__(self, idx):
 		n_factors = len(self.factor_sizes)
 		first_sample = self.data[idx]
@@ -137,21 +139,26 @@ class TupleLoader(Dataset):
 		first_sample_feat = self.index_manager.index_to_features(idx)
 		if self.prior == 'uniform':
 			# only change up to k factors
-			if self.k == -1:
-				k = np.random.randint(1, n_factors)  # number of factors which can change
-			else:
-				k = self.k
+			assert self.k == 1, f'Modified method so that k is assumed to be 1'
+			k = self.k
 
-			second_sample_feat = first_sample_feat.copy()
-
-			indices = np.random.choice(self.possible_factors, k, replace=False)
-			for ind in indices:
+			unfound = True 
+			while (unfound):
+				second_sample_feat = first_sample_feat.copy()
+				index = np.random.choice(self.possible_factors, k, replace=False).item()
 				
-				p = np.ones_like(self.possible_fillers[ind]) / (self.possible_fillers[ind].shape[0] - 1)
-				p[self.possible_fillers[ind] == first_sample_feat[ind]] = 0  # dont pick same
+				diff_idxs = (self.factor_classes[:, index] != first_sample_feat[index]) # (N, )
+				if sum(diff_idxs) != 0: 
+					unfound = False 
 
-				second_sample_feat[ind] = np.random.choice(self.possible_fillers[ind], 1, p=p)
-			assert np.equal(first_sample_feat - second_sample_feat, 0).sum() == n_factors - k
+			#print(f'Diff idxs is {diff_idxs} with shape {diff_idxs.shape}')
+			filler_vals = self.factor_classes[diff_idxs, index]
+			sampled_filler_val = np.random.choice(np.unique(filler_vals), 1)
+			#print(f'Filler vals is {filler_vals}, sampled is {sampled_filler_val}')
+			second_sample_ind = np.random.choice(np.argwhere(self.factor_classes[diff_idxs, index] == sampled_filler_val).ravel(), 1).item()
+			#print(f'Sampled idx is {second_sample_ind}')
+			second_sample_feat = self.index_manager.index_to_features(second_sample_ind)
+			#print(f'Second sample feat {second_sample_feat}')
 
 		elif self.prior == 'laplace':
 			if isinstance(self.index_manager, IndexManagersGTFactorsKnown): 
@@ -182,6 +189,7 @@ class TupleLoader(Dataset):
 		return first_sample, second_sample, first_sample_feat, second_sample_feat
 	
 	def truncated_laplace_cg(self, start) -> np.array: 
+		assert self.k == 1, f'Method assumes only 1 factor changes'
 		if self.rate == -1:
 			rate = np.random.uniform(1, 10, 1)[0]
 		else:
@@ -189,26 +197,31 @@ class TupleLoader(Dataset):
 		end = []
 		n_factors = len(self.factor_sizes)
 
-		for i in range(n_factors): 
-			mean = start[i] 
-			upper = self.possible_fillers[i].max().item() + 1
-			p = laplace.pdf(self.possible_fillers[i], loc=mean, scale=np.log(upper)/rate)
-			print(f'Mean is {mean}, upper is {upper}, p is {p}, possible fillers {self.possible_fillers[i]}')
-			p /= np.sum(p) 
-			end.append(np.random.choice(self.possible_fillers[i], 1, p=p)[0])
-		end = np.array(end).astype(np.int64)
-		end[self.categorical] = start[self.categorical]
+		unfound = True
 
-		# make sure there is at least one change
-		if np.sum(abs(start - end)) == 0:
-			ind = np.random.choice(self.possible_factors_exc_categorical, 1)[0]  # don't change categorical factors
-			filler_choices = self.possible_fillers[ind]
-			p = laplace.pdf(filler_choices, loc=start[ind],
-							scale=np.log(filler_choices[ind].max().item() + 1) / rate)
-			p[filler_choices == start[ind]] = 0
-			p /= np.sum(p)
-			end[ind] = np.random.choice(filler_choices, 1, p=p)
-		assert np.sum(abs(start - end)) > 0
+		while unfound: 
+			selected_fac = np.random.choice(self.possible_factors_exc_categorical, 1)
+			mean = start[selected_fac] 
+			mask = (self.factor_classes[:, selected_fac] != start[selected_fac])
+			#print(f'N elements {sum(mask)}, shape {mask.shape}')
+			mask_2 = ((self.factor_classes == start).sum(axis=1) == n_factors-1)[:, np.newaxis]
+			#print(f'N elements mask 2 {sum(mask_2)}, shape {mask_2.shape}')
+			mask &= mask_2
+			#print(f'N elements {sum(mask)}')
+			possible_filler_idxs = np.argwhere(mask)[:, 0]
+			if possible_filler_idxs.size != 0: 
+				unfound = False 
+
+		print(f'Possible filler idxs {possible_filler_idxs} with shape {possible_filler_idxs.shape}, factor classes shape {self.factor_classes.shape}')
+		possible_fillers = self.factor_classes[possible_filler_idxs, selected_fac]
+		upper = possible_fillers.max().item() + 1
+		print(f'Possible fillers {possible_fillers}, upper {upper}, mean {mean}')
+		p = laplace.pdf(possible_fillers, loc=mean, scale=np.log(max(upper, mean+1))/rate)
+		print(f'Mean is {mean}, upper is {upper}, p is {p}, possible fillers {self.possible_fillers}')
+		p /= np.sum(p) 
+		end = np.copy(start)
+		end[selected_fac] = np.random.choice(possible_fillers, 1, p=p)
+
 		return end
 		
 
@@ -241,8 +254,10 @@ class TupleLoader(Dataset):
 class IndexManagersGTFactorsKnown(object): 
 	def __init__(self, factor_classes: np.array): 
 		self.factor_classes = factor_classes 
+		print(f'We have {self.factor_classes.shape[0]} items')
 
 	def features_to_index(self, features) -> int: 
+		print(f'Features is {features}, argwhere is {np.argwhere((self.factor_classes == features).all(axis=1))}')
 		idx = np.argwhere((self.factor_classes == features).all(axis=1)).item()
 		return idx
 
@@ -681,7 +696,7 @@ class Shapes3D(TupleLoader):
 	url = 'https://storage.googleapis.com/3d-shapes/3dshapes.h5'
 	fname = '3dshapes.h5'
 
-	def __init__(self, cg_split: str, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/shapes3d/', data=None, **tupel_loader_kwargs):
+	def __init__(self, cg_split: str=R2E_RANDOM, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/shapes3d/', data=None, **tupel_loader_kwargs):
 		super().__init__(**tupel_loader_kwargs)
 		from itertools import product
 
@@ -702,10 +717,11 @@ class Shapes3D(TupleLoader):
 			with h5py.File(os.path.join(self.path, self.fname), 'r') as dataset:
 				images = dataset['images'][()]
 				factor_vals = dataset['labels'][()]
+				print(f'Shape of factor vals {factor_vals.shape}')
 				train_mask = shapes3d_cg_splits[cg_split](factor_vals)
 			self.data = np.transpose(images, (0, 3, 1, 2))[train_mask]   # np.uint8
 			self.factor_vals = factor_vals[train_mask] 
-			self.factor_classes = np.asarray(list(product(*[range(i) for i in self.factor_sizes])))[train_mask]
+			self.factor_classes = np.asarray(list(product(*[range(i) for i in self.factor_sizes])))[train_mask] 
 			self.index_manager = IndexManagersGTFactorsKnown(factor_classes=self.factor_classes)
 		else:
 			self.data = data
@@ -733,7 +749,7 @@ class SpriteDataset(TupleLoader):
 	for details see https://github.com/deepmind/dsprites-dataset
 	"""
 
-	def __init__(self, cg_split: str, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/dsprites', **tupel_loader_kwargs):
+	def __init__(self, cg_split: str=R2E_RANDOM, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/dsprites', **tupel_loader_kwargs):
 		super().__init__(**tupel_loader_kwargs)
 
 		url = "https://github.com/deepmind/dsprites-dataset/raw/master/dsprites_ndarray_co1sh3sc6or40x32y32_64x64.npz"
@@ -746,6 +762,8 @@ class SpriteDataset(TupleLoader):
 
 		self.data, self.factor_vals, self.factor_classes = self.load_data(cg_split)
 		self.index_manager = IndexManagersGTFactorsKnown(self.factor_classes)
+		self.init_possible_factors()
+		self.init_possible_fillers()
 		#except FileNotFoundError:
 			#if not os.path.exists(path):
 			#	os.makedirs(path, exist_ok=True)
@@ -753,8 +771,6 @@ class SpriteDataset(TupleLoader):
 			#	f'downloading dataset ... saving to {os.path.join(path, "dsprites.npz")}')
 			#request.urlretrieve(url, os.path.join(path, 'dsprites.npz'))
 			#self.data = self.load_data()
-		self.init_possible_factors()
-		self.init_possible_fillers()
 
 	def __len__(self):
 		return len(self.data)
@@ -766,7 +782,9 @@ class SpriteDataset(TupleLoader):
 		factor_vals = dataset_zip['latents_values'][:, 1:] # remove luminescence
 		factor_classes = dataset_zip['latents_classes'][:, 1:] 
 
-		train_mask = shapes3d_cg_splits[cg_split](factor_vals)
+		train_mask = dsprites_cg_splits[cg_split](factor_vals)
+
+		print(f'Masking {train_mask.sum()} out of {imgs.shape[0]} elements')
 
 		return imgs[train_mask], factor_vals[train_mask], factor_classes[train_mask]
 
@@ -783,7 +801,7 @@ class MPI3DReal(TupleLoader):
 	url = 'https://storage.googleapis.com/disentanglement_dataset/Final_Dataset/mpi3d_real.npz'
 	fname = 'mpi3d_real.npz'
 
-	def __init__(self, cg_split: str, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/mpi3d/', **tupel_loader_kwargs):
+	def __init__(self, cg_split: str=R2E_RANDOM, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/mpi3d/', **tupel_loader_kwargs):
 		super().__init__(**tupel_loader_kwargs)
 
 		self.factor_sizes = [6, 6, 2, 3, 3, 40, 40]
@@ -1239,16 +1257,28 @@ if __name__ == '__main__':
 
 	# dsprites example
 	print('DSprites')
-	dset = SpriteDataset(prior='laplace', rate=1, k=-1)
+	dset = SpriteDataset(prior='laplace', rate=1, k=1)
+	test_data(dset, True)
+
+	print('Dsprites Schott split')
+	dset = SpriteDataset(cg_split=SCHOTT_SPLIT, prior='laplace', rate=1, k=1)
 	test_data(dset, True)
 
 	# mpi real example
 	print('MPI3dReal')
-	dset = MPI3DReal(prior='laplace', rate=1, k=-1)
+	dset = MPI3DReal(prior='laplace', rate=1, k=1)
+	test_data(dset, True)
+
+	print('MPI3dReal Schott split')
+	dset = MPI3DReal(cg_split=SCHOTT_SPLIT, prior='laplace', rate=1, k=1)
 	test_data(dset, True)
 
 	# shapes dataset
 	print('Shapes3D... takes 5min')
-	dset = Shapes3D(prior='laplace', rate=1, k=-1)
+	dset = Shapes3D(prior='laplace', rate=1, k=1)
+	test_data(dset, True)
+
+	print('Shapes3D Schott split')
+	dset = Shapes3D(cg_split=SCHOTT_SPLIT, prior='laplace', rate=1, k=1)
 	test_data(dset, True)
 

@@ -5,6 +5,8 @@ import numpy as np
 import torch
 import datetime
 
+from scripts.splits.splits import *
+
 from scripts.solver import Solver
 from scripts.dataset import return_data
 #from scripts.evaluate_disentanglement import main as eval_dis
@@ -149,6 +151,7 @@ if __name__ == "__main__":
 	parser.add_argument('--cuda', action='store_true', default=False)
 	parser.add_argument('--num_runs', default=10, type=int, help='when searching over seeds, do 10')
 	parser.add_argument('--use_writer', action='store_true')
+	parser.add_argument('--cg_split', default=R2E_RANDOM, type=str, choices=SPLIT_CHOICES)
 	args = parser.parse_args()
 	assert not (args.random_search and args.betavae and not args.search_beta)
 	assert not ((args.random_search or args.random_seeds) and args.evaluate)
