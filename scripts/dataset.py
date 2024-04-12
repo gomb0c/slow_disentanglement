@@ -29,6 +29,7 @@ import pickle
 import h5py
 from matplotlib import pyplot as plt
 
+from scripts.splits.splits import dsprites_cg_splits, shapes3d_cg_splits, mpi3d_cg_splits
 
 class TupleLoader(Dataset):
 	def __init__(self, k=-1, rate=1, prior='uniform', transform=None,
@@ -680,7 +681,7 @@ class Shapes3D(TupleLoader):
 	url = 'https://storage.googleapis.com/3d-shapes/3dshapes.h5'
 	fname = '3dshapes.h5'
 
-	def __init__(self, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/shapes3d/', data=None, **tupel_loader_kwargs):
+	def __init__(self, cg_split: str, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/shapes3d/', data=None, **tupel_loader_kwargs):
 		super().__init__(**tupel_loader_kwargs)
 		from itertools import product
 
@@ -690,6 +691,7 @@ class Shapes3D(TupleLoader):
 		self.categorical_idxs = np.array([4])
 
 		self.path = path
+		self.split_fn = shapes3d_cg_splits[cg_split]
 
 		if not os.path.exists(self.path): raise FileNotFoundError
 			#self.download()
@@ -700,9 +702,10 @@ class Shapes3D(TupleLoader):
 			with h5py.File(os.path.join(self.path, self.fname), 'r') as dataset:
 				images = dataset['images'][()]
 				factor_vals = dataset['labels'][()]
-			self.data = np.transpose(images, (0, 3, 1, 2))   # np.uint8
-			self.factor_vals = factor_vals 
-			self.factor_classes = np.asarray(list(product(*[range(i) for i in self.factor_sizes])))
+				train_mask = shapes3d_cg_splits[cg_split](factor_vals)
+			self.data = np.transpose(images, (0, 3, 1, 2))[train_mask]   # np.uint8
+			self.factor_vals = factor_vals[train_mask] 
+			self.factor_classes = np.asarray(list(product(*[range(i) for i in self.factor_sizes])))[train_mask]
 			self.index_manager = IndexManagersGTFactorsKnown(factor_classes=self.factor_classes)
 		else:
 			self.data = data
@@ -730,7 +733,7 @@ class SpriteDataset(TupleLoader):
 	for details see https://github.com/deepmind/dsprites-dataset
 	"""
 
-	def __init__(self, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/dsprites', **tupel_loader_kwargs):
+	def __init__(self, cg_split: str, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/dsprites', **tupel_loader_kwargs):
 		super().__init__(**tupel_loader_kwargs)
 
 		url = "https://github.com/deepmind/dsprites-dataset/raw/master/dsprites_ndarray_co1sh3sc6or40x32y32_64x64.npz"
@@ -741,7 +744,7 @@ class SpriteDataset(TupleLoader):
 		self.categorical = np.array([True, False, False, False, False])
 		self.categorical_idxs = np.array([0])
 
-		self.data, self.factor_vals, self.factor_classes = self.load_data()
+		self.data, self.factor_vals, self.factor_classes = self.load_data(cg_split)
 		self.index_manager = IndexManagersGTFactorsKnown(self.factor_classes)
 		#except FileNotFoundError:
 			#if not os.path.exists(path):
@@ -756,13 +759,16 @@ class SpriteDataset(TupleLoader):
 	def __len__(self):
 		return len(self.data)
 
-	def load_data(self):
+	def load_data(self, cg_split):
 		dataset_zip = np.load(os.path.join(self.path, 'dsprites_ndarray_co1sh3sc6or40x32y32_64x64.npz'),
 							  encoding="latin1", allow_pickle=True)
 		imgs = dataset_zip["imgs"].squeeze().astype(np.float32)
 		factor_vals = dataset_zip['latents_values'][:, 1:] # remove luminescence
 		factor_classes = dataset_zip['latents_classes'][:, 1:] 
-		return imgs, factor_vals, factor_classes
+
+		train_mask = shapes3d_cg_splits[cg_split](factor_vals)
+
+		return imgs[train_mask], factor_vals[train_mask], factor_classes[train_mask]
 
 class MPI3DReal(TupleLoader):
 	"""
@@ -777,7 +783,7 @@ class MPI3DReal(TupleLoader):
 	url = 'https://storage.googleapis.com/disentanglement_dataset/Final_Dataset/mpi3d_real.npz'
 	fname = 'mpi3d_real.npz'
 
-	def __init__(self, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/mpi3d/', **tupel_loader_kwargs):
+	def __init__(self, cg_split: str, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/mpi3d/', **tupel_loader_kwargs):
 		super().__init__(**tupel_loader_kwargs)
 
 		self.factor_sizes = [6, 6, 2, 3, 3, 40, 40]
@@ -792,11 +798,14 @@ class MPI3DReal(TupleLoader):
 		data_zip = np.load(load_path)
 		data = data_zip['images']
 		factor_classes = data_zip['labels']
-		self.data = np.transpose(data.reshape([-1, 64, 64, 3]), (0, 3, 1, 2))  # np.uint8
-		self.factor_classes = factor_classes 
-		self.factor_vals = factor_classes 
+
+		train_mask = mpi3d_cg_splits[cg_split](factor_classes)
+		self.data = np.transpose(data.reshape([-1, 64, 64, 3]), (0, 3, 1, 2))[train_mask]  # np.uint8
+		self.factor_classes = factor_classes[train_mask] 
+		self.factor_vals = factor_classes[train_mask]
+
 		self.index_manager = IndexManagersGTFactorsKnown(self.factor_classes)
-	
+		
 		self.init_possible_factors()
 		self.init_possible_fillers()
 
@@ -1113,7 +1122,8 @@ def return_data(args):
 		train_data = SpriteDataset(
 			prior=args.data_distribution,
 			rate=args.rate_data,
-			k=args.data_k)
+			k=args.data_k,
+			cg_split=args.cg_split)
 
 	elif name.lower() == 'cars3d':
 		train_data = Cars3D(
@@ -1133,14 +1143,16 @@ def return_data(args):
 		train_data = Shapes3D(
 			prior=args.data_distribution,
 			rate=args.rate_data,
-			k=args.data_k)
+			k=args.data_k,
+			cg_split=args.cg_split)
 		num_channel = 3
 
 	elif name.lower() == 'mpi3d':
 		train_data = MPI3DReal(
 			prior=args.data_distribution,
 			rate=args.rate_data,
-			k=args.data_k)
+			k=args.data_k,
+			cg_split=args.cg_split)
 		num_channel = 3
 				
 	elif name.lower() == 'natural':
