@@ -2,6 +2,8 @@
 outputs
 checkpoints
 data
+logs/
+outputs/
 
 .DS_Store
 __pycache__/
