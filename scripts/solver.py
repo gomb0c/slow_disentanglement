@@ -48,7 +48,7 @@ def compute_sparsity(mu, normed=True):
 
 class Solver(object):
     def __init__(self, args, data_loader=None):
-        self.ckpt_dir = f'args.ckpt_dir/{args.cg_split}'
+        self.ckpt_dir = args.ckpt_dir
         self.output_dir = args.output_dir
         self.data_loader = data_loader
         self.dataset = args.dataset

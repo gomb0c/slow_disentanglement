@@ -41,7 +41,7 @@ def main(args, data_loader=None, writer=None):
 	args.output_dir = os.path.join(args.output_dir, str(args.seed))
 	if not os.path.exists(args.output_dir):
 		os.makedirs(args.output_dir, exist_ok=True)
-	args.ckpt_dir = os.path.join(args.ckpt_dir, args.experiment_dir, str(args.seed))
+	args.ckpt_dir = os.path.join(args.ckpt_dir, args.cg_split, args.experiment_dir, str(args.seed))
 	print(f'Checkpoint dir is at {args.ckpt_dir}')
 	if not os.path.exists(args.ckpt_dir):
 		print(f'Creating checkpoint dir at {args.ckpt_dir}\n')
@@ -106,7 +106,7 @@ if __name__ == "__main__":
 						help='(laplace, uniform)')
 	parser.add_argument('--rate-data', default=1, type=float,
 						help='rate (or inverse scale) for data laplace (larger -> sparser). (-1 = rand).')
-	parser.add_argument('--data-k', default=-1, type=int,
+	parser.add_argument('--data-k', default=1, type=int,
 						help='k for data uniform (-1 = rand).')
 	parser.add_argument('--betavae', action='store_true', default=False,
 						help='whether to do standard betavae training (gamma=0)')

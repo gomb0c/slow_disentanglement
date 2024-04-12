@@ -73,7 +73,7 @@ class TupleLoader(Dataset):
 			for i in range(n_factors): 
 				possible_fillers_for_fac_i = np.unique(self.index_manager.factor_classes[:, i], axis=0)
 				self.possible_fillers[i] = np.sort(possible_fillers_for_fac_i, axis=None)
-				print(f'Possible fillers for fac {i} are: {possible_fillers_for_fac_i}')
+				#print(f'Possible fillers for fac {i} are: {possible_fillers_for_fac_i}')
 		else: 
 			for i in range(n_factors): 
 				self.possible_fillers[i] = np.arange(self.factor_sizes[i])
@@ -212,12 +212,12 @@ class TupleLoader(Dataset):
 			if possible_filler_idxs.size != 0: 
 				unfound = False 
 
-		print(f'Possible filler idxs {possible_filler_idxs} with shape {possible_filler_idxs.shape}, factor classes shape {self.factor_classes.shape}')
+		#print(f'Possible filler idxs {possible_filler_idxs} with shape {possible_filler_idxs.shape}, factor classes shape {self.factor_classes.shape}')
 		possible_fillers = self.factor_classes[possible_filler_idxs, selected_fac]
 		upper = possible_fillers.max().item() + 1
-		print(f'Possible fillers {possible_fillers}, upper {upper}, mean {mean}')
+		#print(f'Possible fillers {possible_fillers}, upper {upper}, mean {mean}')
 		p = laplace.pdf(possible_fillers, loc=mean, scale=np.log(max(upper, mean+1))/rate)
-		print(f'Mean is {mean}, upper is {upper}, p is {p}, possible fillers {self.possible_fillers}')
+		#print(f'Mean is {mean}, upper is {upper}, p is {p}, possible fillers {self.possible_fillers}')
 		p /= np.sum(p) 
 		end = np.copy(start)
 		end[selected_fac] = np.random.choice(possible_fillers, 1, p=p)
@@ -254,10 +254,10 @@ class TupleLoader(Dataset):
 class IndexManagersGTFactorsKnown(object): 
 	def __init__(self, factor_classes: np.array): 
 		self.factor_classes = factor_classes 
-		print(f'We have {self.factor_classes.shape[0]} items')
+		#print(f'We have {self.factor_classes.shape[0]} items')
 
 	def features_to_index(self, features) -> int: 
-		print(f'Features is {features}, argwhere is {np.argwhere((self.factor_classes == features).all(axis=1))}')
+		#print(f'Features is {features}, argwhere is {np.argwhere((self.factor_classes == features).all(axis=1))}')
 		idx = np.argwhere((self.factor_classes == features).all(axis=1)).item()
 		return idx
 
@@ -717,8 +717,10 @@ class Shapes3D(TupleLoader):
 			with h5py.File(os.path.join(self.path, self.fname), 'r') as dataset:
 				images = dataset['images'][()]
 				factor_vals = dataset['labels'][()]
-				print(f'Shape of factor vals {factor_vals.shape}')
 				train_mask = shapes3d_cg_splits[cg_split](factor_vals)
+				n_not_masked = train_mask.sum()
+				n_total = factor_vals.shape[0]
+				print(f'{n_not_masked}/{n_total} in training {n_not_masked/n_total}')
 			self.data = np.transpose(images, (0, 3, 1, 2))[train_mask]   # np.uint8
 			self.factor_vals = factor_vals[train_mask] 
 			self.factor_classes = np.asarray(list(product(*[range(i) for i in self.factor_sizes])))[train_mask] 
