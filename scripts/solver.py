@@ -214,6 +214,9 @@ class Solver(object):
                     running_var_means = np.zeros(self.z_dim)
                     running_other = np.zeros_like(running_other)
 
+                if self.global_iter % 100 == 0: 
+                    print(f'{self.global_iter}')
+                
                 if self.global_iter % self.save_step == 0:
                     self.save_checkpoint('last')
 

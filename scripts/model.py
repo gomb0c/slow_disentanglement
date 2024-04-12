@@ -83,6 +83,9 @@ class BetaVAE_H(nn.Module):
 
     def _decode(self, z):
         return self.decoder(z)
+    
+    def repn_fn(self, x):
+        return self.encoder(x).chunk(chunks=2, dim=-1)[0]
 
 def kaiming_init(m):
     if isinstance(m, (nn.Linear, nn.Conv2d)):

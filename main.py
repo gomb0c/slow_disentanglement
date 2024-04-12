@@ -7,7 +7,7 @@ import datetime
 
 from scripts.solver import Solver
 from scripts.dataset import return_data
-from scripts.evaluate_disentanglement import main as eval_dis
+#from scripts.evaluate_disentanglement import main as eval_dis
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
@@ -40,12 +40,15 @@ def main(args, data_loader=None, writer=None):
 	if not os.path.exists(args.output_dir):
 		os.makedirs(args.output_dir, exist_ok=True)
 	args.ckpt_dir = os.path.join(args.ckpt_dir, args.experiment_dir, str(args.seed))
+	print(f'Checkpoint dir is at {args.ckpt_dir}')
 	if not os.path.exists(args.ckpt_dir):
+		print(f'Creating checkpoint dir at {args.ckpt_dir}\n')
 		os.makedirs(args.ckpt_dir, exist_ok=True)
 	if args.use_writer:
 		from torch.utils.tensorboard import SummaryWriter
 		args.log_dir = os.path.join(args.log_dir, args.experiment_dir, str(args.seed))
 		if not os.path.exists(args.log_dir):
+			print(f'Creating log dir at {args.log_dir}\n')
 			os.makedirs(args.log_dir, exist_ok=True) 
 		writer = SummaryWriter(args.log_dir)
 		for arg in vars(args):
@@ -55,16 +58,17 @@ def main(args, data_loader=None, writer=None):
 	torch.manual_seed(args.seed)
 	torch.cuda.manual_seed(args.seed)
 	np.random.seed(args.seed)
-	if args.evaluate:
-		eval_dis(args, data_loader.dataset)
+	#if args.evaluate:
+	#	eval_dis(args, data_loader.dataset)
+	#else:
+	print(f'*********SOLVING*************')
+	net = Solver(args, data_loader=data_loader)
+	failure = net.train(writer)
+	if failure:
+		print('failed in %.2fs' % (time.time() - t0))
+		shutil.rmtree(args.output_dir)
 	else:
-		net = Solver(args, data_loader=data_loader)
-		failure = net.train(writer)
-		if failure:
-			print('failed in %.2fs' % (time.time() - t0))
-			shutil.rmtree(args.output_dir)
-		else:
-			print('done in %.2fs' % (time.time() - t0))
+		print('done in %.2fs' % (time.time() - t0))
 	# get original args back
 	args = parser.parse_args()
 	args.num_channel = num_channel
@@ -112,7 +116,7 @@ if __name__ == "__main__":
 						help='log directory')
 	parser.add_argument('--ckpt-dir', default='checkpoints', type=str,
 						help='checkpoint directory')
-	parser.add_argument('--max-iter', default=300000, type=float,
+	parser.add_argument('--max-iter', default=500000, type=float,
 						help='maximum training iteration')
 	parser.add_argument('--dataset', default='dsprites', type=str,
 						help='dataset name (dsprites, cars3d,'
@@ -144,6 +148,7 @@ if __name__ == "__main__":
 	parser.add_argument('--verbose', action='store_true', default=False, help='for evaluation')
 	parser.add_argument('--cuda', action='store_true', default=False)
 	parser.add_argument('--num_runs', default=10, type=int, help='when searching over seeds, do 10')
+	parser.add_argument('--use_writer', action='store_true')
 	args = parser.parse_args()
 	assert not (args.random_search and args.betavae and not args.search_beta)
 	assert not ((args.random_search or args.random_seeds) and args.evaluate)
@@ -172,3 +177,7 @@ if __name__ == "__main__":
 			args = main(args, data_loader=data_loader)
 	else:
 		args = main(args, data_loader=data_loader)
+
+# if this actually works -> incorporate the model splitting
+# train a few models using default hyperparameters 
+# for each model, train a clf on the latent rep
