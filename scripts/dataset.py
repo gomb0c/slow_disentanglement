@@ -46,6 +46,11 @@ class TupleLoader(Dataset):
 		self.rate = rate
 		self.k = k
 
+		self.possible_factors = None 
+		self.possible_factors_exc_categorical = None 
+		self.possible_fillers = None 
+		self.categorical_idxs = None 
+
 		if prior == 'laplace' and k != -1:
 			print('warning setting k has no effect on prior=laplace. '
 				  'Set k=-1 or leave to default to get rid of this warning.')
@@ -56,6 +61,39 @@ class TupleLoader(Dataset):
 
 	def __len__(self):
 		return len(self.data)
+	
+	def init_possible_fillers(self): 
+		if self.possible_fillers is not None: 
+			return 
+		n_factors = len(self.factor_sizes)
+		self.possible_fillers = {} 
+		if isinstance(self.index_manager, IndexManagersGTFactorsKnown):
+			for i in range(n_factors): 
+				possible_fillers_for_fac_i = np.unique(self.index_manager.factor_classes[:, i], axis=0)
+				self.possible_fillers[i] = np.sort(possible_fillers_for_fac_i, axis=None)
+				print(f'Possible fillers for fac {i} are: {possible_fillers_for_fac_i}')
+		else: 
+			for i in range(n_factors): 
+				self.possible_fillers[i] = np.arange(self.factor_sizes[i])
+	
+	def init_possible_factors(self): 
+		if self.possible_factors is not None: 
+			return 
+		n_factors = len(self.factor_sizes)
+		if isinstance(self.index_manager, IndexManagersGTFactorsKnown): 
+			possible_factors = []
+			for i in range(n_factors):
+				_, counts = np.unique(self.index_manager.factor_classes[:, i], axis=0, return_counts=True)
+				if counts.shape[0] > 0: 
+					possible_factors.append(i)
+			possible_factors = np.array(possible_factors)
+			possible_factors_exc_categorical = possible_factors[~np.isin(possible_factors, self.categorical_idxs)]
+			print(f'Possible factors is {possible_factors}, exc categorical {possible_factors_exc_categorical}')
+		else: 
+			possible_factors = n_factors 
+			possible_factors_exc_categorical = possible_factors[~self.categorical]
+		self.possible_factors = possible_factors
+		self.possible_factors_exc_categorical = self.possible_factors_exc_categorical
 
 	def sample_factors(self, num, random_state):
 		"""Sample a batch of observations X. Needed in dis. lib."""
@@ -104,17 +142,21 @@ class TupleLoader(Dataset):
 				k = self.k
 
 			second_sample_feat = first_sample_feat.copy()
-			indices = np.random.choice(n_factors, k, replace=False)
-			for ind in indices:
-				x = np.arange(self.factor_sizes[ind])
-				p = np.ones_like(x) / (x.shape[0] - 1)
-				p[x == first_sample_feat[ind]] = 0  # dont pick same
 
-				second_sample_feat[ind] = np.random.choice(x, 1, p=p)
+			indices = np.random.choice(self.possible_factors, k, replace=False)
+			for ind in indices:
+				
+				p = np.ones_like(self.possible_fillers[ind]) / (self.possible_fillers[ind].shape[0] - 1)
+				p[self.possible_fillers[ind] == first_sample_feat[ind]] = 0  # dont pick same
+
+				second_sample_feat[ind] = np.random.choice(self.possible_fillers[ind], 1, p=p)
 			assert np.equal(first_sample_feat - second_sample_feat, 0).sum() == n_factors - k
 
 		elif self.prior == 'laplace':
-			second_sample_feat = self.truncated_laplace(first_sample_feat)
+			if isinstance(self.index_manager, IndexManagersGTFactorsKnown): 
+				second_sample_feat = self.truncated_laplace_cg(first_sample_feat)
+			else: 
+				second_sample_feat = self.truncated_laplace(first_sample_feat)
 		else:
 			raise NotImplementedError
 		second_sample_ind = self.index_manager.features_to_index(second_sample_feat)
@@ -137,6 +179,37 @@ class TupleLoader(Dataset):
 			second_sample_feat = self.target_transform(second_sample_feat)
 
 		return first_sample, second_sample, first_sample_feat, second_sample_feat
+	
+	def truncated_laplace_cg(self, start) -> np.array: 
+		if self.rate == -1:
+			rate = np.random.uniform(1, 10, 1)[0]
+		else:
+			rate = self.rate
+		end = []
+		n_factors = len(self.factor_sizes)
+
+		for i in range(n_factors): 
+			mean = start[i] 
+			upper = self.possible_fillers[i].max().item() + 1
+			p = laplace.pdf(self.possible_fillers[i], loc=mean, scale=np.log(upper)/rate)
+			print(f'Mean is {mean}, upper is {upper}, p is {p}, possible fillers {self.possible_fillers[i]}')
+			p /= np.sum(p) 
+			end.append(np.random.choice(self.possible_fillers[i], 1, p=p)[0])
+		end = np.array(end).astype(np.int64)
+		end[self.categorical] = start[self.categorical]
+
+		# make sure there is at least one change
+		if np.sum(abs(start - end)) == 0:
+			ind = np.random.choice(self.possible_factors_exc_categorical, 1)[0]  # don't change categorical factors
+			filler_choices = self.possible_fillers[ind]
+			p = laplace.pdf(filler_choices, loc=start[ind],
+							scale=np.log(filler_choices[ind].max().item() + 1) / rate)
+			p[filler_choices == start[ind]] = 0
+			p /= np.sum(p)
+			end[ind] = np.random.choice(filler_choices, 1, p=p)
+		assert np.sum(abs(start - end)) > 0
+		return end
+		
 
 	def truncated_laplace(self, start):
 		if self.rate == -1:
@@ -163,6 +236,17 @@ class TupleLoader(Dataset):
 			end[ind] = np.random.choice(x, 1, p=p)
 		assert np.sum(abs(start - end)) > 0
 		return end
+
+class IndexManagersGTFactorsKnown(object): 
+	def __init__(self, factor_classes: np.array): 
+		self.factor_classes = factor_classes 
+
+	def features_to_index(self, features) -> int: 
+		idx = np.argwhere((self.factor_classes == features).all(axis=1)).item()
+		return idx
+
+	def index_to_features(self, idx): 
+		return self.factor_classes[idx]
 
 
 class IndexManger(object):
@@ -596,13 +680,14 @@ class Shapes3D(TupleLoader):
 	url = 'https://storage.googleapis.com/3d-shapes/3dshapes.h5'
 	fname = '3dshapes.h5'
 
-	def __init__(self, path='/home/bethia/Documents/Data/datasets/shapes3d/', data=None, **tupel_loader_kwargs):
+	def __init__(self, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/shapes3d/', data=None, **tupel_loader_kwargs):
 		super().__init__(**tupel_loader_kwargs)
+		from itertools import product
 
 		self.factor_sizes = [10, 10, 10, 8, 4, 15]
 		self.num_factors = len(self.factor_sizes)
 		self.categorical = np.array([False, False, False, False, True, False])
-		self.index_manager = IndexManger(self.factor_sizes)
+		self.categorical_idxs = np.array([4])
 
 		self.path = path
 
@@ -614,9 +699,15 @@ class Shapes3D(TupleLoader):
 		if data is None:
 			with h5py.File(os.path.join(self.path, self.fname), 'r') as dataset:
 				images = dataset['images'][()]
+				factor_vals = dataset['labels'][()]
 			self.data = np.transpose(images, (0, 3, 1, 2))   # np.uint8
+			self.factor_vals = factor_vals 
+			self.factor_classes = np.asarray(list(product(*[range(i) for i in self.factor_sizes])))
+			self.index_manager = IndexManagersGTFactorsKnown(factor_classes=self.factor_classes)
 		else:
 			self.data = data
+		self.init_possible_factors()
+		self.init_possible_fillers()
 
 	def download(self):
 		print('downloading shapes3d')
@@ -639,7 +730,7 @@ class SpriteDataset(TupleLoader):
 	for details see https://github.com/deepmind/dsprites-dataset
 	"""
 
-	def __init__(self, path='/home/bethia/Documents/Data/datasets/dsprites', **tupel_loader_kwargs):
+	def __init__(self, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/dsprites', **tupel_loader_kwargs):
 		super().__init__(**tupel_loader_kwargs)
 
 		url = "https://github.com/deepmind/dsprites-dataset/raw/master/dsprites_ndarray_co1sh3sc6or40x32y32_64x64.npz"
@@ -648,17 +739,19 @@ class SpriteDataset(TupleLoader):
 		self.factor_sizes = [3, 6, 40, 32, 32]
 		self.num_factors = len(self.factor_sizes)
 		self.categorical = np.array([True, False, False, False, False])
-		self.index_manager = IndexManger(self.factor_sizes)
+		self.categorical_idxs = np.array([0])
 
-		try:
-			self.data = self.load_data()
-		except FileNotFoundError:
-			if not os.path.exists(path):
-				os.makedirs(path, exist_ok=True)
-			print(
-				f'downloading dataset ... saving to {os.path.join(path, "dsprites.npz")}')
-			request.urlretrieve(url, os.path.join(path, 'dsprites.npz'))
-			self.data = self.load_data()
+		self.data, self.factor_vals, self.factor_classes = self.load_data()
+		self.index_manager = IndexManagersGTFactorsKnown(self.factor_classes)
+		#except FileNotFoundError:
+			#if not os.path.exists(path):
+			#	os.makedirs(path, exist_ok=True)
+			#print(
+			#	f'downloading dataset ... saving to {os.path.join(path, "dsprites.npz")}')
+			#request.urlretrieve(url, os.path.join(path, 'dsprites.npz'))
+			#self.data = self.load_data()
+		self.init_possible_factors()
+		self.init_possible_fillers()
 
 	def __len__(self):
 		return len(self.data)
@@ -666,7 +759,10 @@ class SpriteDataset(TupleLoader):
 	def load_data(self):
 		dataset_zip = np.load(os.path.join(self.path, 'dsprites_ndarray_co1sh3sc6or40x32y32_64x64.npz'),
 							  encoding="latin1", allow_pickle=True)
-		return dataset_zip["imgs"].squeeze().astype(np.float32)
+		imgs = dataset_zip["imgs"].squeeze().astype(np.float32)
+		factor_vals = dataset_zip['latents_values'][:, 1:] # remove luminescence
+		factor_classes = dataset_zip['latents_classes'][:, 1:] 
+		return imgs, factor_vals, factor_classes
 
 class MPI3DReal(TupleLoader):
 	"""
@@ -681,20 +777,28 @@ class MPI3DReal(TupleLoader):
 	url = 'https://storage.googleapis.com/disentanglement_dataset/Final_Dataset/mpi3d_real.npz'
 	fname = 'mpi3d_real.npz'
 
-	def __init__(self, path='/home/bethia/Documents/Data/datasets/mpi3d/', **tupel_loader_kwargs):
+	def __init__(self, path='/media/bethia/F6D2E647D2E60C25/Data/datasets/mpi3d/', **tupel_loader_kwargs):
 		super().__init__(**tupel_loader_kwargs)
 
 		self.factor_sizes = [6, 6, 2, 3, 3, 40, 40]
 		self.num_factors = len(self.factor_sizes)
 		self.categorical = np.array([False, True, False, False, False, False, False])
-		self.index_manager = IndexManger(self.factor_sizes)
+		self.categorical_idxs = np.array([1])
 		if not os.path.exists(path):
 			raise FileNotFoundError
             #self.download(path)
 
 		load_path = os.path.join(path, self.fname)
-		data = np.load(load_path)['images']
+		data_zip = np.load(load_path)
+		data = data_zip['images']
+		factor_classes = data_zip['labels']
 		self.data = np.transpose(data.reshape([-1, 64, 64, 3]), (0, 3, 1, 2))  # np.uint8
+		self.factor_classes = factor_classes 
+		self.factor_vals = factor_classes 
+		self.index_manager = IndexManagersGTFactorsKnown(self.factor_classes)
+	
+		self.init_possible_factors()
+		self.init_possible_fillers()
 
 	def download(self, path):
 		os.makedirs(path, exist_ok=True)
@@ -1124,15 +1228,15 @@ if __name__ == '__main__':
 	# dsprites example
 	print('DSprites')
 	dset = SpriteDataset(prior='laplace', rate=1, k=-1)
-	test_data(dset, False)
+	test_data(dset, True)
 
 	# mpi real example
 	print('MPI3dReal')
 	dset = MPI3DReal(prior='laplace', rate=1, k=-1)
-	test_data(dset, False)
+	test_data(dset, True)
 
 	# shapes dataset
 	print('Shapes3D... takes 5min')
 	dset = Shapes3D(prior='laplace', rate=1, k=-1)
-	test_data(dset, False)
+	test_data(dset, True)
 

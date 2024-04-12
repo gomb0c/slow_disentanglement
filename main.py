@@ -137,7 +137,7 @@ if __name__ == "__main__":
 						help='Adam optimizer beta2')
 	parser.add_argument('--ckpt-name', default='last', type=str,
 						help='load previous checkpoint. insert checkpoint filename')
-	parser.add_argument('--log-step', default=1000, type=int,
+	parser.add_argument('--log-step', default=5000, type=int,
 						help='numer of iterations after which data is logged')
 	parser.add_argument('--save-step', default=10000, type=int,
 						help='number of iterations after which a checkpoint is saved')
